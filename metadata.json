@@ -1,0 +1,8 @@
+{
+	"name": "Nvidia SMI",
+	"description": "Get the list of processes that are using your GPU and other information provided by nvidia-smi",
+	"uuid": "nvidia-smi@ruiguilherme.com",
+	"shell-version": ["40"],
+	"version": 1,
+	"url": "https://github.com/RuiGuilherme/gnome-shell-extension-nvidia-smi"
+}
