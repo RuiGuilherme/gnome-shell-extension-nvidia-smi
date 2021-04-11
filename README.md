@@ -10,6 +10,8 @@ Get the list of processes that are using your GPU and other information provided
 
 <li>nvidia-smi</li>
 
+<li>htop:lasted</li>
+
 </ul> 
 
 
