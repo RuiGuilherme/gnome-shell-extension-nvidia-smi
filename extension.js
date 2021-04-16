@@ -46,38 +46,18 @@ const toXML = Me.imports.tXml
 // local imports functions from files
 const parseToXML = toXML.parse
 const simplifyXML = toXML.simplify
+const bytesToArray = imports.byteArray
 
 const getItems = () => {
 	// Expected data
 	const nvidiaSMI = GLib.find_program_in_path('nvidia-smi')
-	const stringOut = GLib.spawn_command_line_sync(`${nvidiaSMI} -q --xml-format`)[1].toString()
-
+	const stringOut = bytesToArray.toString(GLib.spawn_command_line_sync(`${nvidiaSMI} -q --xml-format`)[1])
 	const logObj = simplifyXML(parseToXML(stringOut))
 
 	const { nvidia_smi_log } = logObj
 	const { driver_version, gpu, cuda_version } = nvidia_smi_log
 	const { product_name, utilization, processes, fb_memory_usage, vbios_version } = gpu
 	const { process_info } = processes
-
-	// Optional itens: - futere plans
-	/*
-		{graphics_clock, mem_clock, sm_clock, video_clock} = max_clocks,
-		{used, total, free} = bar1_memory_usage,
-		String = fan_speed,
-		{current_gom, pending_gom} = gpu_operation_mode,
-		{graphics_clock, mem_clock} = applications_clocks,
-		{graphics_clock, mem_clock} = default_applications_clocks,
-		{current_dm, pending_dm} = driver_model,
-		{host_vgpu_mode, virtualization_mode} = gpu_virtualization_mode,
-		String = persistence_mode,
-		String = performance_state,
-		String = power_readings,
-		String = supported_clocks,
-		{gpu_target_temp_max, gpu_target_temp_min} = supported_gpu_target_temp,
-		{gpu_target_temperature, gpu_temp, gpu_temp_max_gpu_threshold, gpu_temp_max_mem_threshold, gpu_temp_max_threshold, gpu_temp_slow_threshold, memory_temp} = temperature,
-		String = uuid
-		{graphics_clock, mem_clock, sm_clock, video_clock} = clocks
-	*/
 
 	return {
 		vbios_version,
@@ -103,8 +83,8 @@ const Indicator = GObject.registerClass(
 				})
 			)
 
-			this._onStart()
-			this._onLoopUpdate()
+			this._onStart() //build ui with initial values from nvidia-smi
+			this._onLoopUpdate() //start recursive loop to update values
 		}
 
 		_onLoopUpdate() {
@@ -119,113 +99,116 @@ const Indicator = GObject.registerClass(
 			const { driver_version, product_name, vbios_version, process_info, utilization, fb_memory_usage, cuda_version } = getItems()
 
 			this.pid = []
-			this.pidMenu = []
-			this.memoryMenu = []
-			this.pathMenu = []
-			this.htopMenu = []
 
-			this.labelPidMenu = []
-			this.labelMemoryMenuP = []
-			this.labelPathMenu = []
-			this.labelHtopMenu = []
+			const staticMenu = [
+				{
+					label: '',
+					value: product_name,
+					position: null,
+					isDefault: true,
+					hasSeparator: false
+				},
+				{
+					label: _('Driver v'),
+					value: driver_version,
+					position: null,
+					isDefault: true,
+					hasSeparator: false
+				},
+				{
+					label: _('Cuda v'),
+					value: cuda_version,
+					position: null,
+					isDefault: true,
+					hasSeparator: false
+				},
+				{
+					label: _('BIOS v'),
+					value: vbios_version,
+					position: null,
+					isDefault: true,
+					hasSeparator: false
+				},
+				{
+					label: _('Processes'),
+					value: '',
+					position: ActorAlign.CENTER,
+					isDefault: true,
+					hasSeparator: true
+				}
+			]
 
-			this.genericMenu = []
+			staticMenu.map((props) => {
+				const { label, value, position, isDefault, hasSeparator } = props
 
-			this.gpuMenu = new popupMenu.PopupBaseMenuItem()
-			this.driverMenu = new popupMenu.PopupBaseMenuItem()
-			this.cudaMenu = new popupMenu.PopupBaseMenuItem()
-			this.biosMenu = new popupMenu.PopupBaseMenuItem()
-			this.processMenu = new popupMenu.PopupBaseMenuItem()
+				if (!isDefault) return
 
-			this.labelGPUMenu = new St.Label({ text: product_name, x_expand: true })
-			this.labelDriverMenu = new St.Label({ text: _('Driver v') + driver_version, x_expand: true })
-			this.labelCudaMenu = new St.Label({ text: _('Cuda v') + cuda_version, x_expand: true })
-			this.labelBiosMenu = new St.Label({ text: _('BIOS v') + vbios_version, x_expand: true })
-			this.labelProcessMenu = new St.Label({ text: _('Processes'), x_align: ActorAlign.CENTER, x_expand: true })
+				if (hasSeparator) {
+					this.menu.addMenuItem(new popupMenu.PopupSeparatorMenuItem())
+				}
 
-			this.gpuMenu.actor.add_child(this.labelGPUMenu)
-			this.driverMenu.actor.add_child(this.labelDriverMenu)
-			this.cudaMenu.actor.add_child(this.labelCudaMenu)
-			this.biosMenu.actor.add_child(this.labelBiosMenu)
-			this.processMenu.actor.add_child(this.labelProcessMenu)
+				const staticMenu = new popupMenu.PopupBaseMenuItem()
+				const staticLabel = new St.Label({ text: label + value, x_expand: true, x_align: position })
 
-			// Static menus
-			this.menu.addMenuItem(this.gpuMenu)
-			this.menu.addMenuItem(this.driverMenu)
-			this.menu.addMenuItem(this.cudaMenu)
-			this.menu.addMenuItem(this.biosMenu)
+				staticMenu.actor.add_child(staticLabel)
 
-			// Processes menu
-			this.menu.addMenuItem(new popupMenu.PopupSeparatorMenuItem())
-			this.menu.addMenuItem(this.processMenu)
+				this.menu.addMenuItem(staticMenu)
+			})
+
 			this._onBuildProcessesMenu(process_info)
+
 			this.menu.addMenuItem(new popupMenu.PopupSeparatorMenuItem())
 
-			// Others
 			this._onBuildUtilizationMenu(utilization)
 			this._onBuildMemoryUsage(fb_memory_usage)
-			this._onFork()
+			this._onBuildForkMenu()
 		}
 
 		_onUpdateValue() {
 			const { process_info, utilization, fb_memory_usage } = getItems()
+			this._onUpdateMemoryUsage(fb_memory_usage)
+			this._onUpdateUtilization(utilization)
+			this._onUpdateProcessesMenu(process_info)
+		}
 
-			const { decoder_util, encoder_util, gpu_util, memory_util } = utilization
-			this.labelDecoderMenu.text = _('Decoder: ') + decoder_util
-			this.labelEncoderMenu.text = _('Enconder: ') + encoder_util
-			this.labelGpuMenu.text = _('GPU: ') + gpu_util
-			this.labelMemoryMenu.text = _('Memory: ') + memory_util
-
+		_onUpdateMemoryUsage(fb_memory_usage) {
 			const { free, total, used } = fb_memory_usage
 			this.labelTotalMenu.text = _('Total: ') + total
 			this.labelUsedMenu.text = _('Used: ') + used
 			this.labelFreeMenu.text = _('Free: ') + free
-
-			const process_info_id = []
-			process_info.forEach((element) => process_info_id.push(element.pid))
-
-			if (process_info_id.sort().join(',') === this.pid.sort().join(',')) {
-				this.pid.map((prop, key) => {
-					process_info.map((props) => {
-						const { pid, used_memory } = props
-						if (pid.indexOf(prop) !== -1) {
-							this.labelMemoryMenuP[key].text = _('Memory: ') + used_memory
-						}
-					})
-				})
-			} else {
-				/*
-					removeAll() and force reender 	ui 
-					It was the best way I thought to remove old processes and add new processes
-					without leaving it complicated.
-				*/
-				this.menu.removeAll()
-				this._onStart()
-			}
 		}
 
 		_onBuildMemoryUsage(fb_memory_usage) {
 			const { free, total, used } = fb_memory_usage
 
-			this.totalMenu = new popupMenu.PopupBaseMenuItem()
-			this.usedMenu = new popupMenu.PopupBaseMenuItem()
-			this.freeMenu = new popupMenu.PopupBaseMenuItem()
+			const totalMenu = new popupMenu.PopupBaseMenuItem()
+			const usedMenu = new popupMenu.PopupBaseMenuItem()
+			const freeMenu = new popupMenu.PopupBaseMenuItem()
 
 			this.labelTotalMenu = new St.Label({ text: _('Total: ') + total, x_expand: true })
 			this.labelUsedMenu = new St.Label({ text: _('Used: ') + used, x_expand: true })
 			this.labelFreeMenu = new St.Label({ text: _('Free: ') + free, x_expand: true })
 
-			this.totalMenu.actor.add_child(this.labelTotalMenu)
-			this.usedMenu.actor.add_child(this.labelUsedMenu)
-			this.freeMenu.actor.add_child(this.labelFreeMenu)
+			totalMenu.actor.add_child(this.labelTotalMenu)
+			usedMenu.actor.add_child(this.labelUsedMenu)
+			freeMenu.actor.add_child(this.labelFreeMenu)
 
-			this.memoryMenuExpander = new popupMenu.PopupSubMenuMenuItem(_('Memory Usage'), true)
+			const memoryMenuExpander = new popupMenu.PopupSubMenuMenuItem(_('Memory Usage'), true)
 
-			this.memoryMenuExpander.menu.addMenuItem(this.totalMenu)
-			this.memoryMenuExpander.menu.addMenuItem(this.usedMenu)
-			this.memoryMenuExpander.menu.addMenuItem(this.freeMenu)
+			memoryMenuExpander.menu.addMenuItem(totalMenu)
+			memoryMenuExpander.menu.addMenuItem(usedMenu)
+			memoryMenuExpander.menu.addMenuItem(freeMenu)
 
-			this.menu.addMenuItem(this.memoryMenuExpander)
+			this.menu.addMenuItem(memoryMenuExpander)
+		}
+
+		_onUpdateUtilization(utilization) {
+			const { decoder_util, encoder_util, gpu_util, memory_util } = utilization
+
+			this.labelDecoderMenu.text = _('Decoder: ') + decoder_util
+			this.labelEncoderMenu.text = _('Enconder: ') + encoder_util
+			this.labelGpuMenu.text = _('GPU: ') + gpu_util
+			this.labelMemoryMenu.text = _('Memory: ') + memory_util
 		}
 
 		_onBuildUtilizationMenu(utilization) {
@@ -256,69 +239,70 @@ const Indicator = GObject.registerClass(
 			this.menu.addMenuItem(this.utilizationMenuExpander)
 		}
 
+		_onUpdateProcessesMenu(process_info) {
+			const process_info_id = []
+			process_info.forEach((element) => process_info_id.push(element.pid))
+
+			if (!(process_info_id.sort().join(',') === this.pid.sort().join(','))) {
+				this.menu.removeAll()
+				this._onStart()
+			}
+		}
+
 		_onBuildProcessesMenu(process_info) {
-			process_info.map((props, key) => {
-				const { pid, process_name, used_memory } = props
+			process_info.map((props) => {
+				const { pid, process_name } = props
 				// Ohh yess SPLITTTT
 				const processName = process_name.split(' ')[0]
 				const pathSplit = processName.split('/')
 				const realName = pathSplit[pathSplit.length - 1]
 
-				this.pid[key] = pid
+				this.pid.push(pid)
 
-				// const fullNameMenu = new popupMenu.PopupBaseMenuItem()
-				this.pidMenu[key] = new popupMenu.PopupBaseMenuItem()
-				this.memoryMenu[key] = new popupMenu.PopupBaseMenuItem()
-				this.pathMenu[key] = new popupMenu.PopupBaseMenuItem()
-				this.htopMenu[key] = new popupMenu.PopupBaseMenuItem()
+				const pidMenu = new popupMenu.PopupBaseMenuItem()
+				const pathMenu = new popupMenu.PopupBaseMenuItem()
+				const htopMenu = new popupMenu.PopupBaseMenuItem()
 
-				// const labelFullNameMenuMenu = new St.Label({ text: `Path: ${processName}`, x_expand: true })
-				this.labelPidMenu[key] = new St.Label({ text: _('PID: ') + pid, x_expand: true })
-				this.labelMemoryMenuP[key] = new St.Label({ text: _('Memory: ') + used_memory, x_expand: true })
-				this.labelPathMenu[key] = new St.Label({ text: _('Path to clipboard'), x_align: ActorAlign.CENTER, x_expand: true })
-				this.labelHtopMenu[key] = new St.Label({ text: _('Open on htop'), x_align: ActorAlign.CENTER, x_expand: true })
+				const labelPidMenu = new St.Label({ text: _('PID: ') + pid, x_expand: true })
+				const labelPathMenu = new St.Label({ text: _('Path to clipboard'), x_align: ActorAlign.CENTER, x_expand: true })
+				const labelHtopMenu = new St.Label({ text: _('Open on htop'), x_align: ActorAlign.CENTER, x_expand: true })
 
-				// pathMenu.actor.add_child(labelFullNameMenuMenu)
-				this.pidMenu[key].actor.add_child(this.labelPidMenu[key])
-				this.memoryMenu[key].actor.add_child(this.labelMemoryMenuP[key])
-				this.pathMenu[key].actor.add_child(this.labelPathMenu[key])
-				this.htopMenu[key].actor.add_child(this.labelHtopMenu[key])
+				pidMenu.actor.add_child(labelPidMenu)
+				pathMenu.actor.add_child(labelPathMenu)
+				htopMenu.actor.add_child(labelHtopMenu)
 
 				// events
-				this.pathMenu[key].connect('activate', () => {
+				pathMenu.connect('activate', () => {
 					Clipboard.set_text(CLIPBOARD_TYPE, processName)
 				})
 
-				this.htopMenu[key].connect('activate', () => {
-					util.spawnApp(['gnome-terminal -x bash -c "htop -p ' + pid + '"'])
+				htopMenu.connect('activate', () => {
+					util.spawnApp([`gnome-terminal -x bash -c "htop -p ${pid}"`])
 				})
 
-				this.genericMenu[key] = new popupMenu.PopupSubMenuMenuItem(realName, true)
+				const genericMenu = new popupMenu.PopupSubMenuMenuItem(realName, true)
 
-				// Build sub-menu processes
-				// genericMenu.menu.addMenuItem(fullNameMenu)
-				this.genericMenu[key].menu.addMenuItem(this.pidMenu[key])
-				this.genericMenu[key].menu.addMenuItem(this.memoryMenu[key])
-				this.genericMenu[key].menu.addMenuItem(new popupMenu.PopupSeparatorMenuItem())
-				this.genericMenu[key].menu.addMenuItem(this.pathMenu[key])
-				this.genericMenu[key].menu.addMenuItem(this.htopMenu[key])
+				genericMenu.menu.addMenuItem(pidMenu)
+				genericMenu.menu.addMenuItem(new popupMenu.PopupSeparatorMenuItem())
+				genericMenu.menu.addMenuItem(pathMenu)
+				genericMenu.menu.addMenuItem(htopMenu)
 
-				this.menu.addMenuItem(this.genericMenu[key])
+				this.menu.addMenuItem(genericMenu)
 			})
 		}
 
 		// Just a static menu with link to github repository
-		_onFork() {
+		_onBuildForkMenu() {
 			this.menu.addMenuItem(new popupMenu.PopupSeparatorMenuItem())
 
-			this.gitPage = new popupMenu.PopupBaseMenuItem()
-			this.gitLabel = new St.Label({ text: _('Fork me on GitHub'), x_align: ActorAlign.CENTER, x_expand: true })
+			const gitPage = new popupMenu.PopupBaseMenuItem()
+			const gitLabel = new St.Label({ text: _('Fork me on GitHub'), x_align: ActorAlign.CENTER, x_expand: true })
 
-			this.gitPage.actor.add_child(this.gitLabel)
-			this.gitPage.connect('activate', function () {
+			gitPage.actor.add_child(gitLabel)
+			gitPage.connect('activate', function () {
 				util.spawn(['xdg-open', 'https://github.com/RuiGuilherme/gnome-shell-extension-nvidia-smi'])
 			})
-			this.menu.addMenuItem(this.gitPage)
+			this.menu.addMenuItem(gitPage)
 		}
 	}
 )
